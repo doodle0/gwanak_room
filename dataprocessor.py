@@ -68,8 +68,9 @@ def input_filter():
     st.write('## 필터 입력')
     st.write('### 집 제원')
     stn_name = st.selectbox('기준 역', STATION_CAND)
+    stn_id = util.StnInfo.get_id_by_name(stn_name)
     db_filter = [
-        RangeElem('역과의 거리', 'dist_' + util.StnInfo.get_id_by_name(stn_name), float, 0, 1000),
+        RangeElem('역과의 거리', 'dist_' + stn_id, float, 0, 1000),
         RangeElem('면적(m^2)', 'area', float, 0, 100),
         RangeElem('사용승인연도', 'year', int, 1960, 2023),
         RangeElem('층번호', 'floor', int, 1, 30),
@@ -87,9 +88,9 @@ def input_filter():
 #                 break
 #             except Exception:
 #                 print('다시 입력하세요.')
-    return db_filter, search_filter
+    return stn_name, db_filter, search_filter
 
-def print_filtered_result(sql, db_filter, search_filter):
+def print_filtered_result(sql, stn_name, db_filter, search_filter):
     # st.write('# 입력 필터')
     # for ft in db_filter + search_filter:
     #     st.write(ft.to_sql_clause())
@@ -97,16 +98,16 @@ def print_filtered_result(sql, db_filter, search_filter):
     deposit, monthly_rt = search_filter
 
     # DB의 모든 data 중 필터에 맞는 것 필터링 (SQLite)
-    sql.execute(f"""SELECT addr, dist_227, area, year, floor FROM filter_view
+    sql.execute(f"""SELECT addr, name, {db_filter[0].sql_name}, area, year, floor FROM filter_view
         WHERE {' AND '.join(f.to_sql_clause() for f in db_filter)}""")
     res = sql.fetchall()
 
     st.write('## 검색 결과')
-    result = pd.DataFrame(columns=['주소', '역과의 거리', '면적', '건축년도', '층수', '예상 월세'])
+    result = pd.DataFrame(columns=['주소', '건물명', '역과의 거리', '면적(m^2)', '사용승인연도', '층번호', '예상 월세'])
     for elem in res:
         dep_bt, dep_tp = deposit.get_st_elem()
-        exp_min_rt = get_exp_monthly_rt('낙성대역', elem[1], elem[2], elem[3], elem[4], deposit=dep_tp)
-        exp_max_rt = get_exp_monthly_rt('낙성대역', elem[1], elem[2], elem[3], elem[4], deposit=dep_bt)
+        exp_min_rt = get_exp_monthly_rt(stn_name, elem[2], elem[3], elem[4], elem[5], deposit=dep_tp)
+        exp_max_rt = get_exp_monthly_rt(stn_name, elem[2], elem[3], elem[4], elem[5], deposit=dep_bt)
         # 사용자가 설정한 월세 필터 범위와 예측 월세 범위에 겹치는 부분이 있는지 확인
         if check_interval_overlap((exp_min_rt, exp_max_rt), monthly_rt.get_st_elem()):
             result.loc[len(result)] = list(elem) + [f'{exp_min_rt:.0f}~{exp_max_rt:.0f}']

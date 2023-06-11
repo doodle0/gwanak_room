@@ -10,6 +10,7 @@ class StnInfo:
 
     def __init__(self, id, name, lat, lng, traffic):
         self.id = id
+        self.sql_dist_name = 'dist_' + id
         self.name = name
         self.lat = lat
         self.lng = lng
@@ -17,12 +18,21 @@ class StnInfo:
 
     def get_dist(self, point):
         return great_circle((self.lat, self.lng), point).meters
+    
+    def get_mean_tfc(self):
+        return sum(self.traffic) / 2
 
     @classmethod
-    def get_id_by_name(cls, name):
+    def get_obj_by_name(cls, name):
         for stn in cls.STATIONS:
             if stn.name == name:
-                return stn.id
+                return stn
+
+    @classmethod
+    def get_obj_by_id(cls, id_):
+        for stn in cls.STATIONS:
+            if stn.id == id_:
+                return stn
 
 for idx, row in pd.read_csv('subway.csv').iterrows():
     StnInfo.STATIONS.append(StnInfo(
@@ -32,6 +42,27 @@ for idx, row in pd.read_csv('subway.csv').iterrows():
         row.loc['longitude'],
         (row.loc['traffic_in'], row.loc['traffic_out'])
     ))
+
+
+stn_query_vars = ','.join(stn.sql_dist_name for stn in StnInfo.STATIONS)
+dataset_vars = \
+    ['addr',
+     'area',
+     'year',
+     'floor',
+     'is_oneroom',
+     'is_officetel',
+     'elem_school',
+     'has_elevator',
+     'has_parking',
+     'stn_id',
+     'stn_dist',
+     'stn_traffic',
+     'stn_traffic_per_dist',
+     'stn_traffic_per_dist^2',
+     'deposit',
+     'rate'
+    ]
 
 
 class KakaoAPIHelper:
@@ -81,9 +112,6 @@ class CsvToDB:
             self.sql.execute(f'insert into {tablename} values({", ".join(values)})')
 
 
-def mean(x):
-    return sum(x) / len(x)
-
 def add_rooms():
     c2d = CsvToDB('../db-preproc-0612.csv', SQLManager('data.db'))
 
@@ -132,7 +160,12 @@ def add_buildings():
 
     # 각 지하철역까지의 거리 구하기
     for stn in StnInfo.STATIONS:
-        c2d.df['dist_' + stn.id] = c2d.df[['Latitude', 'Longitude']].apply(lambda x: stn.get_dist(x), axis=1)
+        c2d.df[stn.sql_dist_name] = c2d.df[['Latitude', 'Longitude']].apply(lambda x: stn.get_dist(x), axis=1)
+
+    # 가장 가까운 지하철역 구하기
+    stn_dist_names = [stn.sql_dist_name for stn in StnInfo.STATIONS]
+    c2d.df['near_stn'] = c2d.df[stn_dist_names].idxmin(axis=1).str.replace('dist_', '')
+    print(c2d.df)
 
     c2d.add_map('addr', '대지위치', str)
     c2d.add_map('addr_rdnm', '도로명대지위치', str)
@@ -144,31 +177,14 @@ def add_buildings():
     c2d.add_map('is_oneroom', '원룸여부', int)
     c2d.add_map('is_officetel', '오피스텔여부', int)
     for stn in StnInfo.STATIONS:
-        c2d.add_map(f'dist_{stn.id}', f'dist_{stn.id}', float)
+        c2d.add_map(stn.sql_dist_name, stn.sql_dist_name, float)
+    c2d.add_map('near_stn', 'near_stn', str)
 
     c2d.add_to_table_from_csv('buildings')
     c2d.sql.con.commit()
 
 def make_learning_data(out_filepath):
     c2d = CsvToDB('../2023-1-3rd-preproc.csv', SQLManager('data.db'))
-    stn_query_vars = ','.join(f'dist_{stn.id}' for stn in StnInfo.STATIONS)
-    dataset_vars = \
-        ['addr',
-         'area',
-         'year',
-         'floor',
-         'is_oneroom',
-         'is_officetel',
-         'elem_school',
-         'has_elevator',
-         'has_parking',
-         'stn_id',
-         'stn_traffic',
-         'stn_traffic_by_dist',
-         'stn_traffic_by_dist^2',
-         'deposit',
-         'rate'
-        ]
 
     df, sql = c2d.df, c2d.sql
     df['addr'] = df['시군구'] + ' ' + df['번지'] + '번지'
@@ -179,13 +195,14 @@ def make_learning_data(out_filepath):
     found = pd.DataFrame(columns=dataset_vars)
     not_found = []
     for idx, row in df.iterrows():
-        sql.execute(f'''SELECT {stn_query_vars},
+        sql.execute(f'''SELECT {stn_query_vars}, near_stn,
                         is_oneroom, is_officetel, elem_school, has_elevator, has_parking
                         FROM buildings WHERE addr="{row['addr']}"''')
         res = sql.fetchall()
         if res:
             res = res[0]
-            near_stn_dist, near_stn = min(zip(res[:len(StnInfo.STATIONS)], StnInfo.STATIONS))
+            near_stn = StnInfo.get_obj_by_id(res[len(StnInfo.STATIONS)])
+            near_stn_dist = res[StnInfo.STATIONS.index(near_stn)]
             found.loc[len(found)] = [row['addr'],
                                      row['전용면적(㎡)'],
                                      row['건축년도'],
@@ -196,9 +213,10 @@ def make_learning_data(out_filepath):
                                      res[-2],
                                      res[-1],
                                      near_stn.id,
-                                     mean(near_stn.traffic),
-                                     mean(near_stn.traffic) / near_stn_dist,
-                                     mean(near_stn.traffic) / near_stn_dist ** 2,
+                                     near_stn_dist,
+                                     near_stn.get_mean_tfc(),
+                                     near_stn.get_mean_tfc() / near_stn_dist,
+                                     near_stn.get_mean_tfc() / near_stn_dist ** 2,
                                      row['보증금(만원)'],
                                      row['월세(만원)']
                                     ]
@@ -207,3 +225,6 @@ def make_learning_data(out_filepath):
     print(found, sep='\n')
     print(f'{len(found)=}, {len(not_found)=}')
     found.to_csv(out_filepath)
+
+# add_buildings()
+# make_learning_data('../out.csv')

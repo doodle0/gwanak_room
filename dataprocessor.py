@@ -112,3 +112,33 @@ def print_filtered_result(sql, stn_name, db_filter, search_filter):
         if check_interval_overlap((exp_min_rt, exp_max_rt), monthly_rt.get_st_elem()):
             result.loc[len(result)] = list(elem) + [f'{exp_min_rt:.0f}~{exp_max_rt:.0f}']
     st.write(result)
+    
+        ################## 여기서부터 수정..코드 전체를 이해하지 못해서 주석처리나 ''' str ''' 형태는 수정이 필요합니다.
+        ################## 그리고 지도가 어떻게 나올지 환경이 너무 달라서 확인을 못했습니다..
+
+    return result
+
+
+
+import folium
+from streamlit_folium import st_folium, folium_static
+
+def map_visualize(result, stn_name, max_distance):    #max_distance는 필터링에서 설정한 역과의 최대 거리
+    map = folium.Map(location=['''stn.lat, stn.lon'''], zoom_start=14)     #역의 위도 경도 가져오기, zoom_start 크기로 지도의 시작 줌인 정도를 정할 수 있음.
+    for idx, row in result.iterrows():
+
+        # lat_ = row['lat']         #필터링 데이터의 위도 경도 가져오기
+        # lon_ = row['lon']
+
+         folium.Marker(location=['''lat_, lon_'''],
+                      radius=15,
+                      popup='''마커를 클릭했을 때 나오기 원하는 데이터를 str로''').add_to(map)   #필터링 데이터를 지도 위에 표시하기
+
+    folium.Circle(radius='''max_distance''',        #여기서 max_distance의 단위는 m입니다.
+                  location=['''stn.lat, stn.lon'''],
+                  color="#ff7800",
+                  fill_color='#ffff00',
+                  fill_opacity=0.2
+                  ).add_to(map)      #max_distance를 바탕으로 필터링된 반경을 시각화
+ 
+    folium_static(map, width=700)

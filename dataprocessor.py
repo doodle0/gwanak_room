@@ -10,11 +10,11 @@ class FilterElem:
         self.sql_name = sql_name
 
 class RangeElem(FilterElem):
-    def __init__(self, name, sql_name, typ, min_val, max_val):
+    def __init__(self, name, sql_name, typ, min_val, max_val, **kwargs):
         super().__init__(name, sql_name)
         self.typ = typ
         min_val, max_val = map(typ, (min_val, max_val))
-        self.st_slider = st.slider(name, min_val, max_val, (min_val, max_val))
+        self.st_slider = st.slider(name, min_val, max_val, (min_val, max_val), **kwargs)
 
     def to_sql_clause(self):
         bt, tp = self.get_st_elem()
@@ -67,15 +67,19 @@ def check_interval_overlap(a: tuple, b: tuple):
 
 STATION_CAND = [stn.name for stn in util.StnInfo.STATIONS]
 
+WS = 80
+
 def input_filter():
     st.write('## 필터 입력')
     st.write('### 집 위치')
     stn_name = st.selectbox('기준 역', STATION_CAND)
     stn = util.StnInfo.get_obj_by_name(stn_name)
+    stn_dist = RangeElem('역과의 거리(m)', stn.sql_dist_name, float, 0, 1000)
     stn_filter = [
         stn,
-        RangeElem('역과의 거리', stn.sql_dist_name, float, 0, 1000)
+        stn_dist
     ]
+    st.slider('도보 거리(분)', 0.0, 1000 / WS, (stn_dist.get_st_elem()[0] / WS, stn_dist.get_st_elem()[1] / WS), disabled=True)
 
     st.write('### 집 제원')
     db_filter = [
@@ -86,8 +90,8 @@ def input_filter():
 
     st.write('### 희망 보증금, 월세 범위')
     search_filter = [
-        RangeElem('보증금', 'deposit', int, 0, 10000),
-        RangeElem('월세', 'monthly_rt', int, 0, 200)
+        RangeElem('보증금(만원)', 'deposit', int, 0, 10000),
+        RangeElem('월세(만원)', 'monthly_rt', int, 0, 200)
     ]
 
     return {"stn_filter": stn_filter, "db_filter": db_filter, "search_filter": search_filter}
@@ -114,7 +118,8 @@ def print_filtered_result(sql, stn_filter, db_filter, search_filter):
         'elem_school',
         'has_elevator',
         'has_parking',
-        'near_stn',
+        'near_stn',  # 가장 가까운 역과의 거리
+        stn_dist.sql_name  # 입력한 역과의 거리
     ]
 
     sql.execute(f"""SELECT {', '.join(selection)} FROM building_rooms_view
@@ -122,7 +127,7 @@ def print_filtered_result(sql, stn_filter, db_filter, search_filter):
     res = sql.fetchall()
 
     st.write('## 검색 결과')
-    result = pd.DataFrame(columns=['주소', '건물명', 'lat', 'lng', '면적(m^2)', '사용승인연도', '층번호', '예상 월세'])
+    result = pd.DataFrame(columns=['주소', '건물명', 'lat', 'lng', '면적(m^2)', '사용승인연도', '층번호', f'{stn.name} 도보시간', '예상 월세(만원)'])
     for elem in res:
         dep_bt, dep_tp = deposit.get_st_elem()
         v = make_inp_vec(dict(zip(selection, elem)))
@@ -130,8 +135,8 @@ def print_filtered_result(sql, stn_filter, db_filter, search_filter):
         exp_max_rt = get_exp_monthly_rt(v, deposit=dep_bt)
         # 사용자가 설정한 월세 필터 범위와 예측 월세 범위에 겹치는 부분이 있는지 확인
         if check_interval_overlap((exp_min_rt, exp_max_rt), monthly_rt.get_st_elem()):
-            result.loc[len(result)] = [*elem[:7], f'{exp_min_rt:.0f}~{exp_max_rt:.0f}']
-    st.write(result[['주소', '건물명', '면적(m^2)', '사용승인연도', '층번호', '예상 월세']])
+            result.loc[len(result)] = [*elem[:7], f'{elem[-1] / WS:.0f}분', f'{exp_min_rt:.0f}~{exp_max_rt:.0f}']
+    st.write(result[['주소', '건물명', '면적(m^2)', '사용승인연도', '층번호', f'{stn.name} 도보시간', '예상 월세(만원)']])
     map_visualize(result, stn, stn_dist.get_st_elem()[1])
 
     return result
